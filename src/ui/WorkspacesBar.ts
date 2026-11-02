@@ -209,7 +209,7 @@ export class WorkspacesBar {
                     lastButton1PressEvent = event;
                     break;
                 case 3:
-                    this._button.menu.toggle();
+                    this._menu.toggleForWorkspace(workspace.index);
                     return Clutter.EVENT_STOP;
             }
             return Clutter.EVENT_PROPAGATE;
@@ -238,7 +238,7 @@ export class WorkspacesBar {
                     lastTouchBeginEvent = event;
                     this._touchTimeout
                         .once(LONG_PRESS_DURATION)
-                        .then(() => this._button.menu.toggle());
+                        .then(() => this._menu.toggleForWorkspace(workspace.index));
                     break;
                 case Clutter.EventType.TOUCH_END:
                     if (lastTouchBeginEvent) {
