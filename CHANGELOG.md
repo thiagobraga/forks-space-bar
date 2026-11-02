@@ -1,6 +1,7 @@
 ## Next
 
 - Feature: Right-click (or long-press) a workspace in the bar to rename or remove that workspace, not only the current one
+- Feature: Add setting to show the indicator on the primary monitor, all monitors, or a specific monitor. Monitors without a top panel get a bar of their own
 
 ## v40
 

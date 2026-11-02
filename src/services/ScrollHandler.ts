@@ -8,43 +8,66 @@ import { Workspaces } from './Workspaces.js';
 export class ScrollHandler {
     private _ws = Workspaces.getInstance();
     private _settings = Settings.getInstance();
-    private _disconnectBinding?: () => void;
+    private _disconnectBindings: (() => void)[] = [];
     private _lastScrollTime = 0;
-    private _panelButton: any = null;
 
-    init(panelButtonSubject: Subject<any>) {
-        panelButtonSubject.subscribe((panelButton) => (this._panelButton = panelButton));
-        const panelButtonCallback = (panelButton: any) => this._registerScroll(panelButton);
-        this._settings.scrollWheel.subscribe(
-            (value) => {
-                panelButtonSubject.unsubscribe(panelButtonCallback);
-                this._disconnectBinding?.();
-                switch (value) {
-                    case 'panel':
-                        this._registerScroll(Main.panel);
-                        break;
-                    case 'workspaces-bar':
-                        panelButtonSubject.subscribe(panelButtonCallback);
-                        break;
-                    case 'disabled':
-                        this._disconnectBinding = undefined;
-                        break;
+    init(widgetsSubject: Subject<{ button: any; panel: any }[]>) {
+        const updateBindings = () => {
+            this._clearBindings();
+            const widgets = widgetsSubject.value ?? [];
+            switch (this._settings.scrollWheel.value) {
+                case 'panel': {
+                    // The top panel always reacts, bars on other monitors act as panels as well.
+                    const panels = new Set([Main.panel, ...widgets.map((w) => w.panel)]);
+                    for (const panel of panels) {
+                        this._registerScroll(panel);
+                    }
+                    break;
                 }
-            },
-            { emitCurrentValue: true },
-        );
+                case 'workspaces-bar':
+                    for (const { button } of widgets) {
+                        this._registerScroll(button);
+                    }
+                    break;
+                case 'disabled':
+                    break;
+            }
+        };
+        widgetsSubject.subscribe(() => updateBindings());
+        this._settings.scrollWheel.subscribe(() => updateBindings(), {
+            emitCurrentValue: true,
+        });
     }
 
     destroy() {
-        this._disconnectBinding?.();
-        this._disconnectBinding = undefined;
+        this._clearBindings();
+    }
+
+    private _clearBindings(): void {
+        for (const disconnect of this._disconnectBindings) {
+            disconnect();
+        }
+        this._disconnectBindings = [];
     }
 
     private _registerScroll(widget: any): void {
+        if (!widget) {
+            return;
+        }
+        let disconnected = false;
         const scrollBinding = widget.connect('scroll-event', (actor: any, event: any) =>
             this._handle_scroll(actor, event),
         );
-        this._disconnectBinding = () => widget.disconnect(scrollBinding);
+        const destroyBinding = widget.connect('destroy', () => {
+            disconnected = true;
+        });
+        this._disconnectBindings.push(() => {
+            if (!disconnected) {
+                disconnected = true;
+                widget.disconnect(scrollBinding);
+                widget.disconnect(destroyBinding);
+            }
+        });
     }
 
     /**

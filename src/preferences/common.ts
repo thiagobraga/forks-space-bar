@@ -329,6 +329,9 @@ export function addCombo({
     });
     group.add(row);
     row.connect('notify::selected-item', () => {
+        if (!row.selectedItem) {
+            return;
+        }
         // This may trigger without user interaction, so we only update the value when it differs
         // from the the default value or a user value has been set before.
         const value = (row.selectedItem as DropDownChoiceClass).id;

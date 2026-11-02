@@ -68,6 +68,7 @@ export class Settings {
         this.behaviorSettings,
         'custom-label-unnamed',
     );
+    readonly monitor = SettingsSubject.createStringSubject(this.behaviorSettings, 'monitor');
     readonly position = SettingsSubject.createStringSubject<keyof typeof positionOptions>(
         this.behaviorSettings,
         'position',

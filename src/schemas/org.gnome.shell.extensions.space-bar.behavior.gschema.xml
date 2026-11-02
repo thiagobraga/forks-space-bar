@@ -26,6 +26,11 @@
         <key name="custom-label-unnamed" type="s">
             <default>'Workspace {{number}}'</default>
         </key>
+        <key name="monitor" type="s">
+            <default>'primary'</default>
+            <summary>Monitor to display the indicator on</summary>
+            <description>'primary', 'all', or the connector name of a monitor, e.g. 'DP-1'. Monitors other than the primary one get a bar of their own.</description>
+        </key>
         <key name="position" type="s">
             <choices>
                 <choice value="left" />

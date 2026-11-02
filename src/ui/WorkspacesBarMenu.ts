@@ -2,13 +2,11 @@ import Clutter from 'gi://Clutter';
 import GObject from 'gi://GObject';
 import St from 'gi://St';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
-import { KeyBindings } from '../services/KeyBindings.js';
 import { Settings } from '../services/Settings.js';
 import { WorkspaceNames } from '../services/WorkspaceNames.js';
 import { WorkspaceState, Workspaces } from '../services/Workspaces.js';
 
 export class WorkspacesBarMenu {
-    private readonly _keyBindings = KeyBindings.getInstance();
     private readonly _settings = Settings.getInstance();
     private readonly _ws = Workspaces.getInstance();
     private readonly _wsNames = WorkspaceNames.getInstance();
@@ -70,12 +68,9 @@ export class WorkspacesBarMenu {
                 this._refreshMenu();
             }
         });
-        this._keyBindings.addKeyBinding('open-menu', () => this.openForWorkspace());
     }
 
-    destroy(): void {
-        this._keyBindings.removeKeybinding('open-menu');
-    }
+    destroy(): void {}
 
     private _refreshMenu() {
         this._refreshHiddenWorkspaces();
