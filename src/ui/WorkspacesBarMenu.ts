@@ -15,15 +15,52 @@ export class WorkspacesBarMenu {
 
     private _hiddenWorkspacesSection = new PopupMenu.PopupMenuSection();
     private _manageWorkspaceSection = new PopupMenu.PopupMenuSection();
+    /**
+     * Index of the workspace the menu acts on. When `undefined`, the menu acts on the current
+     * workspace.
+     */
+    private _managedWorkspaceIndex?: number;
+    /** Set when the managed workspace is being removed, so closing the menu doesn't rename it. */
+    private _skipRename = false;
 
     constructor(
         private readonly _extension: any,
         private readonly _menu: any,
     ) {}
 
+    /**
+     * Opens the menu for the given workspace, or for the current workspace if `index` is omitted.
+     *
+     * If the menu is already open, it is closed first so that a pending rename is applied to the
+     * workspace it was started for.
+     */
+    openForWorkspace(index?: number): void {
+        if (this._menu.isOpen) {
+            this._menu.close();
+        }
+        this._managedWorkspaceIndex = index;
+        this._menu.open();
+    }
+
+    /**
+     * Closes the menu if it is open for the given workspace, otherwise opens it for that
+     * workspace.
+     */
+    toggleForWorkspace(index: number): void {
+        if (this._menu.isOpen && this._activeWorkspaceIndex === index) {
+            this._menu.close();
+        } else {
+            this.openForWorkspace(index);
+        }
+    }
+
+    private get _activeWorkspaceIndex(): number {
+        return this._managedWorkspaceIndex ?? this._ws.currentIndex;
+    }
+
     init(): void {
         this._menu.box.add_style_class_name('space-bar-menu');
-        this._addSectionHeading('Rename current workspace');
+        this._addSectionHeading('Rename workspace');
         this._initEntry();
         this._menu.addMenuItem(this._hiddenWorkspacesSection);
         this._initManageWorkspaceSection();
@@ -33,7 +70,7 @@ export class WorkspacesBarMenu {
                 this._refreshMenu();
             }
         });
-        this._keyBindings.addKeyBinding('open-menu', () => this._menu.open());
+        this._keyBindings.addKeyBinding('open-menu', () => this.openForWorkspace());
     }
 
     destroy(): void {
@@ -68,7 +105,8 @@ export class WorkspacesBarMenu {
         let oldName = '';
         this._menu.connect('open-state-changed', () => {
             if (this._menu.isOpen) {
-                oldName = this._ws.workspaces[this._ws.currentIndex].name || '';
+                this._skipRename = false;
+                oldName = this._ws.workspaces[this._activeWorkspaceIndex]?.name || '';
                 // Reset the selection before setting the text since the entry field won't let us do
                 // that when it is empty.
                 entryItem.entry.get_clutter_text().set_selection(0, 0);
@@ -76,9 +114,12 @@ export class WorkspacesBarMenu {
                 entryItem.active = true;
             } else {
                 const newName = entryItem.entry.get_text();
-                if (newName !== oldName) {
-                    this._wsNames.rename(this._ws.currentIndex, newName);
+                const index = this._activeWorkspaceIndex;
+                if (!this._skipRename && newName !== oldName && this._ws.workspaces[index]) {
+                    this._wsNames.rename(index, newName);
                 }
+                this._managedWorkspaceIndex = undefined;
+                this._skipRename = false;
             }
         });
         this._menu.addMenuItem(entryItem);
@@ -163,9 +204,13 @@ export class WorkspacesBarMenu {
             });
             this._manageWorkspaceSection.addMenuItem(newWorkspaceButton);
         }
-        const closeWorkspaceButton = new PopupMenu.PopupMenuItem('Remove current workspace');
+        const closeWorkspaceButton = new PopupMenu.PopupMenuItem('Remove workspace');
         closeWorkspaceButton.connect('activate', () => {
-            this._ws.removeWorkspace(this._ws.currentIndex);
+            const index = this._activeWorkspaceIndex;
+            // Don't apply a pending rename to a workspace that is about to be removed.
+            this._skipRename = true;
+            this._menu.close();
+            this._ws.removeWorkspace(index);
         });
         this._manageWorkspaceSection.addMenuItem(closeWorkspaceButton);
     }

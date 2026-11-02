@@ -1,5 +1,7 @@
 ## Next
 
+- Feature: Right-click (or long-press) a workspace in the bar to rename or remove that workspace, not only the current one
+
 ## v40
 
 - Chore: Add support for GNOME 51
