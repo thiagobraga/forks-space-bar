@@ -6,11 +6,13 @@ import * as DND from 'resource:///org/gnome/shell/ui/dnd.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import { WindowPreview } from 'resource:///org/gnome/shell/ui/windowPreview.js';
+import { KeyBindings } from '../services/KeyBindings.js';
 import { Settings } from '../services/Settings.js';
 import { Styles } from '../services/Styles.js';
 import { WorkspaceState, Workspaces } from '../services/Workspaces.js';
 import { Subject } from '../utils/Subject.js';
 import { Timeout } from '../utils/Timeout.js';
+import { MonitorBar } from './MonitorBar.js';
 import { WorkspacesBarMenu } from './WorkspacesBarMenu.js';
 
 interface DragEvent {
@@ -40,6 +42,11 @@ interface WsBoxPosition {
     wsBox: St.Bin;
 }
 
+interface BarTarget {
+    monitorIndex: number;
+    isPrimary: boolean;
+}
+
 /**
  * Maximum number of milliseconds between button press and button release to be recognized as click.
  */
@@ -50,27 +57,22 @@ const MAX_CLICK_TIME_DELTA = 300;
 const LONG_PRESS_DURATION = 500;
 
 export class WorkspacesBar {
-    private readonly _name: string;
+    private readonly _keyBindings = KeyBindings.getInstance();
     private readonly _settings = Settings.getInstance();
     private readonly _styles = Styles.getInstance();
     private readonly _ws = Workspaces.getInstance();
-    private _button: any;
-    private _buttonSubject = new Subject<any>(null);
-    private _menu!: WorkspacesBarMenu;
-    /** The child of `_button` when `indicator-style` is `current-workspace-name`. */
-    private _wsLabel?: St.Label;
-    /** The child of `_button` when `indicator-style` is `workspaces-bar`. */
-    private _wsBar?: St.BoxLayout;
-    private readonly _dragHandler = new WorkspacesBarDragHandler(() => this._updateWorkspaces());
-    private readonly _touchTimeout = new Timeout();
+    private _widgets: WorkspacesBarWidget[] = [];
+    private _widgetsSubject = new Subject<{ button: any; panel: any }[]>([]);
+    private _monitorsChangedId?: number;
 
-    constructor(private _extension: Extension) {
-        this._name = `${this._extension.metadata.name}`;
-    }
+    constructor(private _extension: Extension) {}
 
     init(): void {
-        this._initButton();
-        this._initMenu();
+        this._initWidgets();
+        this._monitorsChangedId = Main.layoutManager.connect('monitors-changed', () =>
+            this._refreshTopBarConfiguration(),
+        );
+        this._keyBindings.addKeyBinding('open-menu', () => this._openMenuOnCurrentMonitor());
         this._ws.onUpdate(() => this._updateWorkspaces());
         this._styles.onWorkspacesBarChanged(() => this._refreshTopBarConfiguration());
         this._styles.onWorkspaceLabelsChanged(() => this._updateWorkspaces());
@@ -79,32 +81,186 @@ export class WorkspacesBar {
         this._settings.customLabelNamed.subscribe(() => this._updateWorkspaces());
         this._settings.customLabelUnnamed.subscribe(() => this._updateWorkspaces());
         this._settings.indicatorStyle.subscribe(() => this._refreshTopBarConfiguration());
+        this._settings.monitor.subscribe(() => this._refreshTopBarConfiguration());
         this._settings.position.subscribe(() => this._refreshTopBarConfiguration());
         this._settings.positionIndex.subscribe(() => this._refreshTopBarConfiguration());
     }
 
     destroy(): void {
-        this._button.destroy();
-        this._menu.destroy();
-        this._dragHandler.destroy();
-        this._buttonSubject.complete();
-        this._touchTimeout.destroy();
+        this._keyBindings.removeKeybinding('open-menu');
+        if (this._monitorsChangedId) {
+            Main.layoutManager.disconnect(this._monitorsChangedId);
+            this._monitorsChangedId = undefined;
+        }
+        this._destroyWidgets();
+        this._widgetsSubject.complete();
     }
 
-    observeWidget(): Subject<any> {
-        return this._buttonSubject;
+    observeWidget(): Subject<{ button: any; panel: any }[]> {
+        return this._widgetsSubject;
     }
 
     private _refreshTopBarConfiguration(): void {
-        this._button.destroy();
-        this._menu.destroy();
+        this._destroyWidgets();
+        this._initWidgets();
+    }
+
+    private _initWidgets(): void {
+        this._widgets = [];
+        for (const target of this._getTargets()) {
+            const widget = new WorkspacesBarWidget(this._extension, target, () =>
+                this._updateWorkspaces(),
+            );
+            widget.init();
+            this._widgets.push(widget);
+        }
+        this._widgetsSubject.next(
+            this._getLiveWidgets().map((w) => ({ button: w.button, panel: w.panel })),
+        );
+    }
+
+    private _getLiveWidgets(): WorkspacesBarWidget[] {
+        return this._widgets.filter((w) => w.button);
+    }
+
+    private _destroyWidgets(): void {
+        for (const widget of this._widgets) {
+            widget.destroy();
+        }
+        this._widgets = [];
+    }
+
+    private _updateWorkspaces(): void {
+        for (const widget of this._widgets) {
+            widget.updateWorkspaces();
+        }
+    }
+
+    private _openMenuOnCurrentMonitor(): void {
+        const widgets = this._getLiveWidgets();
+        if (widgets.length === 0) {
+            return;
+        }
+        const currentMonitor = global.display.get_current_monitor();
+        const widget = widgets.find((w) => w.monitorIndex === currentMonitor) ?? widgets[0];
+        widget.openMenu();
+    }
+
+    /**
+     * Returns the monitors on which to show the indicator according to the `monitor` setting.
+     *
+     * The primary monitor shows the indicator in the top panel. Other monitors have no panel in
+     * GNOME Shell, so the indicator is shown in a bar of its own.
+     */
+    private _getTargets(): BarTarget[] {
+        const monitors: { index: number }[] = Main.layoutManager.monitors;
+        const primaryIndex: number = Main.layoutManager.primaryIndex;
+        const monitorSetting = this._settings.monitor.value;
+        let indices: number[];
+        if (monitorSetting === 'all') {
+            indices = monitors.map((monitor) => monitor.index);
+        } else if (monitorSetting === 'primary') {
+            indices = [primaryIndex];
+        } else {
+            // Fall back to the primary monitor if the configured one is not connected.
+            const index = this._resolveMonitorIndex(monitorSetting);
+            indices = [index >= 0 ? index : primaryIndex];
+        }
+        return indices.map((monitorIndex) => ({
+            monitorIndex,
+            isPrimary: monitorIndex === primaryIndex,
+        }));
+    }
+
+    private _resolveMonitorIndex(connector: string): number {
+        const monitorManager = (global as any).backend.get_monitor_manager();
+        const index = monitorManager.get_monitor_for_connector(connector);
+        return typeof index === 'number' ? index : -1;
+    }
+}
+
+class WorkspacesBarWidget {
+    private readonly _name: string;
+    private readonly _settings = Settings.getInstance();
+    private readonly _ws = Workspaces.getInstance();
+    private _button: any = null;
+    private _buttonDestroyId?: number;
+    /** The bar holding the button on monitors other than the primary one. */
+    private _monitorBar?: MonitorBar;
+    private _menu!: WorkspacesBarMenu;
+    /** The child of `_button` when `indicator-style` is `current-workspace-name`. */
+    private _wsLabel?: St.Label;
+    /** The child of `_button` when `indicator-style` is `workspaces-bar`. */
+    private _wsBar?: St.BoxLayout;
+    private readonly _dragHandler = new WorkspacesBarDragHandler(() =>
+        this._onUpdateWorkspaces(),
+    );
+    private readonly _touchTimeout = new Timeout();
+
+    constructor(
+        private readonly _extension: any,
+        private readonly _target: BarTarget,
+        private readonly _onUpdateWorkspaces: () => void,
+    ) {
+        this._name = `${this._extension.metadata.name}`;
+    }
+
+    get button(): any {
+        return this._button;
+    }
+
+    /** The actor that acts as the panel for this widget. */
+    get panel(): any {
+        return this._monitorBar?.actor ?? Main.panel;
+    }
+
+    get monitorIndex(): number {
+        return this._target.monitorIndex;
+    }
+
+    init(): void {
         this._initButton();
         this._initMenu();
     }
 
+    destroy(): void {
+        if (this._button && this._buttonDestroyId) {
+            this._button.disconnect(this._buttonDestroyId);
+            this._buttonDestroyId = undefined;
+        }
+        this._button?.destroy();
+        this._button = null;
+        this._monitorBar?.destroy();
+        this._monitorBar = undefined;
+        this._menu.destroy();
+        this._dragHandler.destroy();
+        this._touchTimeout.destroy();
+    }
+
+    openMenu(): void {
+        this._menu.openForWorkspace();
+    }
+
+    updateWorkspaces(): void {
+        if (!this._button) {
+            return;
+        }
+        switch (this._settings.indicatorStyle.value) {
+            case 'current-workspace':
+                this._updateWorkspaceLabel();
+                break;
+            case 'workspaces-bar':
+                this._updateWorkspacesBar();
+                break;
+        }
+    }
+
     private _initButton(): void {
         this._button = new (WorkspacesButton as any)(0.5, this._name);
-        this._buttonSubject.next(this._button);
+        this._buttonDestroyId = this._button.connect('destroy', () => {
+            this._button = null;
+            this._buttonDestroyId = undefined;
+        });
         this._button.styleClass = 'panel-button space-bar';
         switch (this._settings.indicatorStyle.value) {
             case 'current-workspace':
@@ -114,13 +270,23 @@ export class WorkspacesBar {
                 this._initWorkspacesBar();
                 break;
         }
-        Main.panel.addToStatusArea(
-            this._name,
-            this._button,
-            this._settings.positionIndex.value,
-            this._settings.position.value,
-        );
-        this._updateWorkspaces();
+        if (this._target.isPrimary) {
+            const statusArea: any = Main.panel.statusArea;
+            statusArea[this._name]?.destroy();
+            Main.panel.addToStatusArea(
+                this._name,
+                this._button,
+                this._settings.positionIndex.value,
+                this._settings.position.value,
+            );
+        } else {
+            this._monitorBar = new MonitorBar(
+                this._target.monitorIndex,
+                this._settings.position.value,
+            );
+            this._monitorBar.addButton(this._button);
+        }
+        this.updateWorkspaces();
     }
 
     private _initMenu(): void {
@@ -158,17 +324,6 @@ export class WorkspacesBar {
         this._button.trackHover = false;
         this._wsBar = new St.BoxLayout({});
         this._button.add_child(this._wsBar);
-    }
-
-    private _updateWorkspaces() {
-        switch (this._settings.indicatorStyle.value) {
-            case 'current-workspace':
-                this._updateWorkspaceLabel();
-                break;
-            case 'workspaces-bar':
-                this._updateWorkspacesBar();
-                break;
-        }
     }
 
     private _updateWorkspaceLabel() {

@@ -1,4 +1,5 @@
 import Adw from 'gi://Adw';
+import Gdk from 'gi://Gdk';
 import Gio from 'gi://Gio';
 import { addCombo, addLinkButton, addSpinButton, addTextEntry, addToggle } from './common.js';
 
@@ -24,6 +25,36 @@ export const positionOptions = {
     center: 'Center',
     right: 'Right',
 };
+
+function getMonitorOptions(settings: Gio.Settings): { [key: string]: string } {
+    const options: { [key: string]: string } = {
+        primary: 'Primary monitor',
+        all: 'All monitors',
+    };
+    const display = Gdk.Display.get_default();
+    if (display) {
+        const monitors = display.get_monitors();
+        for (let i = 0; i < monitors.get_n_items(); i++) {
+            const monitor = monitors.get_item(i) as Gdk.Monitor | null;
+            if (!monitor) {
+                continue;
+            }
+            const connector = monitor.get_connector();
+            // Monitors are identified by connector, which is stable across restarts.
+            if (!connector || connector in options) {
+                continue;
+            }
+            const description = monitor.get_description() || monitor.get_model() || connector;
+            options[connector] =
+                description !== connector ? `${description} (${connector})` : description;
+        }
+    }
+    const current = settings.get_string('monitor');
+    if (current && !(current in options)) {
+        options[current] = `${current} (disconnected)`;
+    }
+    return options;
+}
 
 export class BehaviorPage {
     window!: Adw.PreferencesWindow;
@@ -107,6 +138,14 @@ export class BehaviorPage {
                     page,
                 });
             },
+        });
+        addCombo({
+            window: this.window,
+            settings: this._settings,
+            group,
+            key: 'monitor',
+            title: 'Monitor',
+            options: getMonitorOptions(this._settings),
         });
         addCombo({
             window: this.window,
